@@ -32,11 +32,33 @@ function isRetryableTransactionError(error: unknown): boolean {
   return false;
 }
 
+const MAX_ATTEMPTS = 3;
+
 export async function postTransfer(input: PostTransferInput) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await attemptTransfer(input);
+    } catch (error) {
+      if (attempt >= MAX_ATTEMPTS || !isRetryableTransactionError(error)) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          throw duplicateReferenceError();
+        }
+        if (isRetryableTransactionError(error)) {
+          throw new HttpError(503, "Transaction temporarily unavailable; retry the request", "TRANSACTION_RETRYABLE");
+        }
+        throw error;
+      }
+      // Jittered backoff; the failed attempt rolled back completely, so retrying is safe.
+      await new Promise((resolve) => setTimeout(resolve, 25 * attempt + Math.random() * 50));
+    }
+  }
+}
+
+async function attemptTransfer(input: PostTransferInput) {
   const { sourceAccountId, destinationAccountId, amountMinor, referenceId } = input;
   const [firstAccountId, secondAccountId] = [sourceAccountId, destinationAccountId].sort();
 
-  try {
+  {
     return await prisma.$transaction(
       async (tx) => {
         // Every transfer acquires both row locks in UUID order. Opposite-direction
@@ -101,16 +123,7 @@ export async function postTransfer(input: PostTransferInput) {
 
         return { transactions: [debit, credit], sourceBalanceMinor, destinationBalanceMinor };
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 5000, timeout: 10000 },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 15000, timeout: 15000 },
     );
-  } catch (error) {
-    // Both account changes and both ledger inserts have rolled back before errors escape.
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      throw duplicateReferenceError();
-    }
-    if (isRetryableTransactionError(error)) {
-      throw new HttpError(503, "Transaction temporarily unavailable; retry the request", "TRANSACTION_RETRYABLE");
-    }
-    throw error;
   }
 }
