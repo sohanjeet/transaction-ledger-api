@@ -1,0 +1,19 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated application output
+node_modules/
+dist/
+
+# Test and tool output
+coverage/
+.vitest/
+*.log
+
+# Generated JavaScript/declaration output from the TypeScript Prisma config
+prisma.config.js
+prisma.config.js.map
+prisma.config.d.ts
+prisma.config.d.ts.map
